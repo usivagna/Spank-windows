@@ -1,14 +1,20 @@
-name: Build
+name: Build and attach release assets
 
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
+  release:
+    types: [published]
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
 
 jobs:
   build:
+    # For PRs and pushes, we just verify it builds on windows.
+    if: github.event_name != 'release'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,28 +30,73 @@ jobs:
       - name: Generate placeholder audio
         run: python scripts/generate_audio.py
 
-      - name: Build
-        run: go build -ldflags "-X main.version=${{ github.ref_name }}" -o spank.exe .
+      - name: Build (sanity check)
+        run: go build -ldflags "-X main.version=dev" -o spank.exe .
 
-      - name: Upload artifact
+  release-build:
+    if: github.event_name == 'release'
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Generate placeholder audio
+        run: python scripts/generate_audio.py
+
+      - name: Build
+        env:
+          GOOS: windows
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -ldflags "-X main.version=${{ github.event.release.tag_name }}" -o spank.exe .
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          $zip = "spank-windows-${{ matrix.goarch }}.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path spank.exe -DestinationPath $zip
+
+      - name: Upload zip artifact (for next job)
         uses: actions/upload-artifact@v4
         with:
-          name: spank-windows-amd64
-          path: spank.exe
+          name: spank-windows-${{ matrix.goarch }}
+          path: spank-windows-${{ matrix.goarch }}.zip
 
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+  upload-to-release:
+    needs: release-build
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download zips
+        uses: actions/download-artifact@v4
         with:
-          name: spank-windows-amd64
+          path: dist
 
-      - name: Create Release
+      - name: Flatten dist folder
+        run: |
+          mkdir -p out
+          find dist -name "*.zip" -maxdepth 3 -type f -print -exec cp {} out/ \;
+          cd out
+          sha256sum *.zip > SHA256SUMS.txt
+
+      - name: Upload assets to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: spank.exe
-          generate_release_notes: true
+          files: |
+            out/*.zip
+            out/SHA256SUMS.txt
