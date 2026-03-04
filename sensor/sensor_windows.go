@@ -88,20 +88,25 @@ procProgIDFromCLSID = ole32.NewProc("ProgIDFromCLSID")
 )
 
 // ISensorManager vtable indices.
+// ISensorManager : IUnknown { GetSensorsByCategory[3], GetSensorsByType[4], GetSensorByID[5], ... }
 const (
-smVtGetSensorsByType = 3 // after QueryInterface, AddRef, Release
+smVtGetSensorsByType = 4 // after QueryInterface[0], AddRef[1], Release[2], GetSensorsByCategory[3]
 )
 
 // ISensorCollection vtable indices.
+// ISensorCollection : IUnknown { GetAt[3], GetCount[4], Clear[5], Add[6], Remove[7] }
 const (
-scVtGetCount = 3
-scVtGetAt    = 4
+scVtGetAt    = 3
+scVtGetCount = 4
 )
 
 // ISensor vtable indices.
+// ISensor : IUnknown { GetID[3], GetCategory[4], GetType[5], GetFriendlyName[6],
+//   GetProperty[7], GetProperties[8], GetSupportedDataFields[9], SetProperties[10],
+//   SupportsDataField[11], GetState[12], GetData[13], ... }
 const (
-sVtGetState = 5
-sVtGetData  = 10
+sVtGetState = 12
+sVtGetData  = 13
 )
 
 // ISensorDataReport vtable indices.
@@ -131,8 +136,14 @@ return r.samples
 
 // comCall invokes a COM method via vtable.
 func comCall(obj uintptr, vtableIdx int, args ...uintptr) (uintptr, error) {
+if obj == 0 {
+return 0, fmt.Errorf("COM call on nil object (vtable index %d)", vtableIdx)
+}
 vtable := *(*uintptr)(unsafe.Pointer(obj))
 method := *(*uintptr)(unsafe.Pointer(vtable + uintptr(vtableIdx)*unsafe.Sizeof(uintptr(0))))
+if method == 0 {
+return 0, fmt.Errorf("COM vtable method at index %d is nil", vtableIdx)
+}
 allArgs := make([]uintptr, 0, 1+len(args))
 allArgs = append(allArgs, obj) // this pointer
 allArgs = append(allArgs, args...)
